@@ -140,7 +140,12 @@ class EufyLifeBLEDevice:
     @property
     def supports_heart_rate(self) -> bool:
         """Return whether the device supports heart rate measurements."""
-        return self._model_id == "eufy T9149"
+        return self._model_id in ["eufy T9149", "eufy T9130"]
+
+    @property
+    def supports_impedance(self) -> bool:
+        """Return whether the device supports impedance measurements."""
+        return self._model_id == "eufy T9130"
 
     @property
     def is_connected(self) -> bool:
@@ -273,7 +278,12 @@ class EufyLifeBLEDevice:
 
         if len(values) > 1:
             _LOGGER.debug("Multiple advertisement packets found: %s", values)
-            if self._model_id in ["eufy T9130", "eufy T9150"]:
+            if self._model_id == "eufy T9130":
+                valid_data = next((data for data in values if len(data) >= 18 and data[10] in [0x01, 0x05, 0x65, 0xA5]), None)
+                if valid_data is None:
+                    return
+                data = valid_data
+            elif self._model_id == "eufy T9150":
                 valid_data = next((data for data in values if len(data) >= 18 and data[10] in [0x01, 0x05]), None)
                 if valid_data is None:
                     return
@@ -285,9 +295,12 @@ class EufyLifeBLEDevice:
 
         _LOGGER.debug("Handling advertisement data: %s", data.hex())
 
-        if self._model_id in ["eufy T9130", "eufy T9150"]:
+        if self._model_id in ["eufy T9130"]:
+            if len(data) >= 18 and (data[10] & 0x01):
+                self._handle_advertisement_weight_update_t9130(data)
+        elif self._model_id in ["eufy T9150"]:
             if len(data) >= 18 and data[10] in [0x01, 0x05]:
-                self._handle_advertisement_weight_update_t9130_t9150(data)
+                self._handle_advertisement_weight_update_t9150(data)
         elif self._model_id in ["eufy T9146", "eufy T9147"]:
             if len(data) == 18 and data[4] == 0xCF:
                 data_range = data[4:15]
@@ -297,12 +310,29 @@ class EufyLifeBLEDevice:
             if len(data) == 19 and data[6] == 0xCF:
                 self._handle_advertisement_weight_update_t9148_t9149(data[6:])
 
-    def _handle_advertisement_weight_update_t9130_t9150(self, data: bytearray) -> None:
+    def _handle_advertisement_weight_update_t9130(self, data: bytearray) -> None:
+        weight_kg = ((data[13] << 8) | data[12]) / 100
+        if weight_kg == 0:
+            weight_kg = None
+        is_final = (data[10] & 0x04)
+        final_weight_kg = weight_kg if is_final else None
+        has_heart_rate = (data[10] & 0x80)
+        heart_rate = data[15] if has_heart_rate else None
+        if heart_rate == 0:
+            heart_rate = None
+        has_impedance = (data[10] & 0x40)
+        impedance_ohm = ((data[18] << 8) | data[17]) / 10 if has_impedance else None
+        if impedance_ohm == 0:
+            impedance_ohm = None
+
+        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, heart_rate, impedance_ohm, False))
+
+    def _handle_advertisement_weight_update_t9150(self, data: bytearray) -> None:
         weight_kg = ((data[13] << 8) | data[12]) / 100
         is_final = data[10] == 0x05
         final_weight_kg = weight_kg if is_final else None
 
-        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, False))
+        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, None, False))
 
     def _handle_advertisement_weight_update_t9148_t9149(self, data: bytearray) -> None:
         weight_kg = ((data[4] << 8) | data[3]) / 100
@@ -313,7 +343,7 @@ class EufyLifeBLEDevice:
         if heart_rate == 0:
             heart_rate = None
 
-        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, heart_rate, False))
+        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, heart_rate, None, False))
 
     def _handle_weight_update_t9120(self, data: bytearray) -> None:
         if len(data) != 11 or data[0] != 0xCF:
@@ -324,7 +354,7 @@ class EufyLifeBLEDevice:
         final_weight_kg = weight_kg if is_final else None
         weight_limit_exceeded = data[9] == 0x02
 
-        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, weight_limit_exceeded))
+        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, None, weight_limit_exceeded))
 
     def _handle_weight_update_t9140(self, data: bytearray) -> None:
         if len(data) < 7 or data[6] not in [0xCA, 0xCE]:
@@ -334,7 +364,7 @@ class EufyLifeBLEDevice:
         is_final = data[6] == 0xCA
         final_weight_kg = weight_kg if is_final else None
 
-        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, False))
+        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, None, False))
 
     def _handle_weight_update_t9146_t9147(self, data: bytearray) -> None:
         if len(data) != 11 or data[0] != 0xCF:
@@ -345,7 +375,7 @@ class EufyLifeBLEDevice:
         final_weight_kg = weight_kg if is_final else None
         weight_limit_exceeded = data[9] == 0x02
 
-        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, weight_limit_exceeded))
+        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, None, weight_limit_exceeded))
 
     def _handle_weight_update_t9148_t9149(self, data: bytearray) -> None:
         if len(data) != 16 or data[0] != 0xCF or data[2] != 0x00:
@@ -356,7 +386,7 @@ class EufyLifeBLEDevice:
         is_final = data[12] == 0x00
         final_weight_kg = weight_kg if is_final else None
 
-        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, False))
+        self._set_state_and_fire_callbacks(EufyLifeBLEState(weight_kg, final_weight_kg, None, None, False))
 
     def _notification_handler_auth(self, _sender: int, data: bytearray) -> None:
         """Handle notification responses on the auth characteristic."""
