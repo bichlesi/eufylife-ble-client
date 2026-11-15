@@ -121,6 +121,8 @@ class EufyLifeBLEDevice:
         """Initialize the EufyLifeBLEDevice."""
         self._model_id = model
         self._model = MODELS[model]
+        # Manufacturer data of the previous advertisement; None until the first.
+        self._last_manufacturer_data: dict[int, bytes] | None = None
 
         self._loop = asyncio.get_running_loop()
 
@@ -274,17 +276,19 @@ class EufyLifeBLEDevice:
         if not manufacturer_data:
             return
 
-        values = list(manufacturer_data.values())
+        values = self._fresh_manufacturer_data(manufacturer_data)
+        if not values:
+            return
 
         if len(values) > 1:
             _LOGGER.debug("Multiple advertisement packets found: %s", values)
             if self._model_id == "eufy T9130":
-                valid_data = next((data for data in values if len(data) >= 18 and data[10] in [0x01, 0x05, 0x65, 0xA5]), None)
+                valid_data = next((data for data in reversed(values) if len(data) >= 18 and data[10] & 0x01), None)
                 if valid_data is None:
                     return
                 data = valid_data
             elif self._model_id == "eufy T9150":
-                valid_data = next((data for data in values if len(data) >= 18 and data[10] in [0x01, 0x05]), None)
+                valid_data = next((data for data in reversed(values) if len(data) >= 18 and data[10] in [0x01, 0x05]), None)
                 if valid_data is None:
                     return
                 data = valid_data
@@ -309,6 +313,23 @@ class EufyLifeBLEDevice:
         elif self._model_id in ["eufy T9148", "eufy T9149"]:
             if len(data) == 19 and data[6] == 0xCF:
                 self._handle_advertisement_weight_update_t9148_t9149(data[6:])
+
+    def _fresh_manufacturer_data(self, manufacturer_data: dict[int, bytes]) -> list[bytes]:
+        """Return the manufacturer data entries that changed since the last advertisement.
+
+        Home Assistant passes the manufacturer data merged over all
+        advertisements of a device, keyed by company ID. Some scales (C20) use
+        more than one key, so entries of earlier weighings stay in the dict
+        and must not be taken for current values. The first advertisement
+        after start only primes the comparison: it may be an old one replayed
+        from the Bluetooth cache.
+        """
+        previous = self._last_manufacturer_data
+        self._last_manufacturer_data = dict(manufacturer_data)
+        if previous is None:
+            _LOGGER.debug("First advertisement, only remembered: %s", list(manufacturer_data.values()))
+            return []
+        return [data for key, data in manufacturer_data.items() if previous.get(key) != data]
 
     def _handle_advertisement_weight_update_t9130(self, data: bytearray) -> None:
         weight_kg = ((data[13] << 8) | data[12]) / 100
