@@ -341,8 +341,13 @@ class EufyLifeBLEDevice:
         heart_rate = data[15] if has_heart_rate else None
         if heart_rate == 0:
             heart_rate = None
-        has_impedance = (data[10] & 0x40)
-        impedance_ohm = ((data[18] << 8) | data[17]) / 10 if has_impedance else None
+        # With heart rate measurement on, the scale flags the impedance with
+        # 0x40 (0x65) and the heart rate with 0x80 (0xA5). With it switched
+        # off, the impedance comes in packets flagged 0x25 only (0x20 without
+        # 0x40/0x80), at the same position.
+        flags = data[10]
+        has_impedance = (flags & 0x40) or (flags & 0xE0) == 0x20
+        impedance_ohm = ((data[18] << 8) | data[17]) / 10 if has_impedance and len(data) >= 19 else None
         if impedance_ohm == 0:
             impedance_ohm = None
 

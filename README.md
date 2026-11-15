@@ -14,6 +14,16 @@ pinned to a tag of this repository).
   primes the comparison. Before, an entry left over from an earlier weighing
   could win and the new weighing was lost.
 
+* 0.1.13: impedance also with the scale's heart rate measurement switched
+  off. Then the C20 sends it in packets flagged `0x25` (no `0x40`), at the
+  same position (bytes 17-18, 0.1 Ω).
+
+C20 (T9130) advertisement, byte 10 flags: `0x01` weight, `0x04` final
+weight, `0x40` impedance, `0x80` heart rate (heart rate measurement on:
+`0x65`, `0xA5`); `0x20` without `0x40`/`0x80` carries the impedance when
+heart rate measurement is off. Bytes 12-13 weight (LE, 10 g), byte 15 heart
+rate (bpm), bytes 17-18 impedance (LE, 0.1 Ω).
+
 Tests: `pip install . pytest && python -m pytest tests`.
 
 # Supported Models
